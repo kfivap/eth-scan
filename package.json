@@ -28,6 +28,7 @@
     "@nestjs/typeorm": "^9.0.1",
     "bignumber.js": "^9.1.0",
     "ethers": "^5.7.0",
+    "needle": "^3.1.0",
     "pg": "^8.8.0",
     "reflect-metadata": "^0.1.13",
     "rimraf": "^3.0.2",

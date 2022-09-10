@@ -11,14 +11,18 @@ import { AccountEntity } from 'src/entities/account.entity';
 import { Repository } from 'typeorm';
 import BigNumber from 'bignumber.js';
 import { LastProcessedBlockEntity } from 'src/entities/last-processed-block.entity';
+import { BlockRewardEntity } from 'src/entities/block-reward.entity';
 
 @Injectable()
 export class EthService implements OnModuleInit {
   private _provider: ethers.providers.InfuraProvider;
   private _logger = new Logger(EthService.name);
-  private readonly _blockchain = 'ETH';
 
-  //logging
+  // bc
+  private readonly _blockchain = 'ETH';
+  private readonly _ethDecimals = 18;
+
+  // logging
   private _maxBlockNumberAtStart: number;
   private _processesBlockInSession = 0;
   private _startedAt = Date.now();
@@ -30,6 +34,8 @@ export class EthService implements OnModuleInit {
     private readonly _transactionRepository: Repository<TransactionEntity>,
     @InjectRepository(LastProcessedBlockEntity)
     private readonly _lastProcessedBlockRepository: Repository<LastProcessedBlockEntity>,
+    @InjectRepository(BlockRewardEntity)
+    private readonly _blockRewardRepository: Repository<BlockRewardEntity>,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -47,6 +53,7 @@ export class EthService implements OnModuleInit {
       const batchSize = 10;
       const promises: Promise<BlockWithTransactions>[] = [];
       for (let i = 0; i < batchSize; i++) {
+        // promises.push(this._provider.getBlockWithTransactions(46147));
         promises.push(this._provider.getBlockWithTransactions(blockNumber + i));
       }
 
@@ -70,20 +77,21 @@ export class EthService implements OnModuleInit {
 
   logProcessingInfo(blockNumber: number) {
     this._processesBlockInSession++;
-    const _durationMinutes = (Date.now() - this._startedAt) / 1000 / 60;
-    const _avgBlockPerMinute = this._processesBlockInSession / _durationMinutes;
-    const _blocksLeft = this._maxBlockNumberAtStart - blockNumber;
-    const _hoursLeftToMaxBlock = _blocksLeft / _avgBlockPerMinute / 60;
+    const durationMinutes = (Date.now() - this._startedAt) / 1000 / 60;
+    const avgBlockPerMinute = this._processesBlockInSession / durationMinutes;
+    const blocksLeft = this._maxBlockNumberAtStart - blockNumber;
+    const hoursLeftToMaxBlock = blocksLeft / avgBlockPerMinute / 60;
     this._logger.log(
-      `avg tempo: ${_avgBlockPerMinute.toFixed(
+      `avg tempo: ${avgBlockPerMinute.toFixed(
         0,
-      )} blocks per minute, hours left ${_hoursLeftToMaxBlock}, blocksLeft ${_blocksLeft} `,
+      )} blocks per minute, hours left ${hoursLeftToMaxBlock}, blocksLeft ${blocksLeft} `,
     );
   }
 
   async processBlock(block: BlockWithTransactions): Promise<void> {
     const totalTx = block.transactions.length;
     let processedTx = 0;
+    let feesSum = new BigNumber('0');
     for (const transaction of block.transactions) {
       this._logger.log(
         `processing tx ${
@@ -92,11 +100,40 @@ export class EthService implements OnModuleInit {
           transaction.blockNumber
         } created on ${new Date(block.timestamp * 1000)}`,
       );
-      await this.processTx(transaction);
+      const tx = await this.processTx(transaction);
+      if (!tx) continue;
+      feesSum = feesSum.plus(tx.feesAmount);
     }
+    await this.processBlockReward(block, feesSum);
   }
 
-  async processTx(transaction: TransactionResponse): Promise<void> {
+  async processBlockReward(block: BlockWithTransactions, feesSum: BigNumber) {
+    const blockRewardAmount = this.calcBlockReward(block, feesSum);
+    const miner = block.miner.toLowerCase();
+
+    const blockRewardData: BlockRewardEntity = {
+      blockNumber: block.number,
+      account: miner,
+      amount: blockRewardAmount.toString(),
+    };
+
+    await this._blockRewardRepository.insert(blockRewardData);
+    const account = await this.getOrCreateAccount(miner);
+    await this.updateAccountStats({
+      ...account,
+      totalMinedAmount: new BigNumber(account.totalMinedAmount)
+        .plus(blockRewardAmount)
+        .toString(),
+      totalMinedBlocks: account.totalMinedBlocks + 1,
+      balance: new BigNumber(account.balance)
+        .plus(blockRewardAmount)
+        .toString(),
+    });
+  }
+
+  async processTx(
+    transaction: TransactionResponse,
+  ): Promise<TransactionEntity> {
     transaction.hash = transaction.hash.toLowerCase();
     const exists = await this.checkTxExists(transaction.hash);
     if (exists) return;
@@ -118,7 +155,7 @@ export class EthService implements OnModuleInit {
       txBase.to = txBase.to.toLowerCase();
       accounts.to = await this.getOrCreateAccount(txBase.to);
     }
-    //todo mined by!!!
+
     try {
       const txReceipt = await transaction.wait();
 
@@ -165,6 +202,8 @@ export class EthService implements OnModuleInit {
           .plus(txBase.amount)
           .toFixed(),
         totalSent: accounts.to.totalSent,
+        totalMinedAmount: accounts.to.totalMinedAmount,
+        totalMinedBlocks: accounts.to.totalMinedBlocks,
       });
     }
     if (accounts.from) {
@@ -181,14 +220,57 @@ export class EthService implements OnModuleInit {
         totalSent: new BigNumber(accounts.from.totalSent)
           .plus(txBase.amount)
           .toFixed(),
+        totalMinedAmount: accounts.from.totalMinedAmount,
+        totalMinedBlocks: accounts.from.totalMinedBlocks,
       });
     }
+
+    return txBase as TransactionEntity;
   }
 
   calcFeesAmount(txReceipt: TransactionReceipt): BigNumber {
     return new BigNumber(
-      txReceipt.effectiveGasPrice.add(txReceipt.cumulativeGasUsed).toString(),
+      txReceipt.gasUsed.mul(txReceipt.effectiveGasPrice).toString(),
     );
+  }
+
+  //   calcBurntAmount(
+  //     tx: TransactionResponse,
+  //     txReceipt: TransactionReceipt,
+  //   ): BigNumber {
+  //     // burnt = fees - (gasUsed * maxPriorityFeePerGas)
+  //     // eip1559
+  //     if (tx.type === 2) {
+  //       return this.calcFeesAmount(txReceipt).minus(
+  //         new BigNumber(txReceipt.gasUsed.toString()).multipliedBy(
+  //           tx.maxPriorityFeePerGas.toString(),
+  //         ),
+  //       );
+  //     }
+  //     return new BigNumber(0);
+  //   }
+
+  calcBlockReward(
+    block: BlockWithTransactions,
+    feesAmount: BigNumber,
+  ): BigNumber {
+    let baseBlockReward = new BigNumber('0');
+    if (block.number <= 4369999) {
+      baseBlockReward = new BigNumber('5');
+    } else if (block.number >= 4370000 && block.number <= 7279999) {
+      baseBlockReward = new BigNumber('3');
+    } else {
+      baseBlockReward = new BigNumber('2');
+    }
+    baseBlockReward = baseBlockReward.shiftedBy(this._ethDecimals);
+
+    // blockReward = baseReward + fees - burnt
+    // burnt = gasUsed * baseFeePerGas
+    const burnt = block.baseFeePerGas
+      ? new BigNumber(block.gasUsed.mul(block.baseFeePerGas).toString())
+      : new BigNumber('0');
+    const blockReward = baseBlockReward.plus(feesAmount).minus(burnt);
+    return blockReward;
   }
 
   async saveTx(tx: TransactionEntity): Promise<void> {
@@ -212,6 +294,8 @@ export class EthService implements OnModuleInit {
         totalFeesPaid: '0',
         totalReceived: '0',
         totalSent: '0',
+        totalMinedAmount: '0',
+        totalMinedBlocks: 0,
       };
       await this._accountRepository.insert(accountData);
       return accountData;

@@ -26,4 +26,10 @@ export class AccountEntity {
 
   @Column()
   totalSent: string;
+
+  @Column()
+  totalMinedAmount: string;
+
+  @Column()
+  totalMinedBlocks: number;
 }
