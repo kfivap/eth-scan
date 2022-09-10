@@ -44,7 +44,7 @@ export class EthService implements OnModuleInit {
     let blockNumber = await this.getLastProcessedBlockNumber();
 
     while (true) {
-      const batchSize = 5;
+      const batchSize = 10;
       const promises: Promise<BlockWithTransactions>[] = [];
       for (let i = 0; i < batchSize; i++) {
         promises.push(this._provider.getBlockWithTransactions(blockNumber + i));
