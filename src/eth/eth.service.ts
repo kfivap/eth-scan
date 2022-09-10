@@ -18,6 +18,11 @@ export class EthService implements OnModuleInit {
   private _logger = new Logger(EthService.name);
   private readonly _blockchain = 'ETH';
 
+  //logging
+  private _maxBlockNumberAtStart: number;
+  private _processesBlockInSession = 0;
+  private _startedAt = Date.now();
+
   constructor(
     @InjectRepository(AccountEntity)
     private readonly _accountRepository: Repository<AccountEntity>,
@@ -28,50 +33,62 @@ export class EthService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    this._provider = new ethers.providers.InfuraProvider('mainnet');
+    const apiKey = process.env['API_KEY'];
+    this._provider = new ethers.providers.InfuraProvider('mainnet', apiKey);
+    this._maxBlockNumberAtStart = await this._provider.getBlockNumber();
+
     this.pullBlocks();
   }
 
   async pullBlocks(): Promise<void> {
     let blockNumber = await this.getLastProcessedBlockNumber();
 
-    const _maxBlockNumberAtStart = await this._provider.getBlockNumber();
-    let _processesBlockInSession = 0;
-
-    const _startedAt = Date.now();
     while (true) {
-      const _getBlockStartAt = Date.now();
-      const block = await this._provider.getBlockWithTransactions(blockNumber);
-      console.log('getBlock ms', Date.now() - _getBlockStartAt);
-      this._logger.log(
-        `processing block ${blockNumber}, txCount: ${
-          block.transactions.length
-        } , created on ${new Date(block.timestamp * 1000)}`,
-      );
+      const batchSize = 5;
+      const promises: Promise<BlockWithTransactions>[] = [];
+      for (let i = 0; i < batchSize; i++) {
+        promises.push(this._provider.getBlockWithTransactions(blockNumber + i));
+      }
 
-      const _processBlockStartAt = Date.now();
-      await this.processBlock(block);
-      console.log('processBlock ms', Date.now() - _processBlockStartAt);
-      await this.setLastProcessedBlockNumber(blockNumber);
-      blockNumber++;
+      const blocks = await Promise.all(promises);
+      for (const block of blocks) {
+        this._logger.log(
+          `processing block ${blockNumber}, txCount: ${
+            block.transactions.length
+          } , created on ${new Date(block.timestamp * 1000)}`,
+        );
 
-      _processesBlockInSession++;
-      const _durationMinutes = (Date.now() - _startedAt) / 1000 / 60;
-      const _avgBlockPerMinute = _processesBlockInSession / _durationMinutes;
-      const _blocksLeft = _maxBlockNumberAtStart - blockNumber;
-      const _hoursLeftToMaxBlock = _blocksLeft / _avgBlockPerMinute / 60;
-      this._logger.log(
-        `avg tempo: ${_avgBlockPerMinute.toFixed(
-          0,
-        )} blocks per minute, hours left ${_hoursLeftToMaxBlock}, blocksLeft ${_blocksLeft} `,
-      );
+        //   const _processBlockStartAt = Date.now();
+        await this.processBlock(block);
+        //   console.log('processBlock ms', Date.now() - _processBlockStartAt);
+        await this.setLastProcessedBlockNumber(blockNumber);
+        blockNumber++;
+        this.logProcessingInfo(blockNumber);
+      }
     }
   }
 
+  logProcessingInfo(blockNumber: number) {
+    this._processesBlockInSession++;
+    const _durationMinutes = (Date.now() - this._startedAt) / 1000 / 60;
+    const _avgBlockPerMinute = this._processesBlockInSession / _durationMinutes;
+    const _blocksLeft = this._maxBlockNumberAtStart - blockNumber;
+    const _hoursLeftToMaxBlock = _blocksLeft / _avgBlockPerMinute / 60;
+    this._logger.log(
+      `avg tempo: ${_avgBlockPerMinute.toFixed(
+        0,
+      )} blocks per minute, hours left ${_hoursLeftToMaxBlock}, blocksLeft ${_blocksLeft} `,
+    );
+  }
+
   async processBlock(block: BlockWithTransactions): Promise<void> {
+    const totalTx = block.transactions.length;
+    let processedTx = 0;
     for (const transaction of block.transactions) {
       this._logger.log(
-        `processing tx ${transaction.hash}, from block ${
+        `processing tx ${
+          transaction.hash
+        }, ${processedTx++} of ${totalTx},  from block ${
           transaction.blockNumber
         } created on ${new Date(block.timestamp * 1000)}`,
       );
@@ -176,7 +193,7 @@ export class EthService implements OnModuleInit {
   }
 
   async saveTx(tx: TransactionEntity): Promise<void> {
-    this._logger.debug(`saveTx: ${JSON.stringify(tx)}`);
+    // this._logger.debug(`saveTx: ${JSON.stringify(tx)}`);
 
     await this._transactionRepository.insert(tx);
   }
@@ -204,7 +221,7 @@ export class EthService implements OnModuleInit {
   }
 
   async updateAccountStats(account: AccountEntity): Promise<void> {
-    this._logger.debug(`updateAccountStats: ${JSON.stringify(account)}`);
+    // this._logger.debug(`updateAccountStats: ${JSON.stringify(account)}`);
     await this._accountRepository.update(
       { address: account.address },
       { ...account },
