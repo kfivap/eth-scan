@@ -88,7 +88,7 @@ export class EthService implements OnModuleInit {
       this._logger.log(
         `processing tx ${
           transaction.hash
-        }, ${processedTx++} of ${totalTx},  from block ${
+        }, ${++processedTx} of ${totalTx},  from block ${
           transaction.blockNumber
         } created on ${new Date(block.timestamp * 1000)}`,
       );
@@ -118,22 +118,22 @@ export class EthService implements OnModuleInit {
       txBase.to = txBase.to.toLowerCase();
       accounts.to = await this.getOrCreateAccount(txBase.to);
     }
-
+    //todo mined by!!!
     try {
       const txReceipt = await transaction.wait();
 
       txBase.success = true;
-      txBase.feesAmount = this.calcFeesAmount(txReceipt).toString();
+      txBase.feesAmount = this.calcFeesAmount(txReceipt).toFixed();
       txBase.totalAmount = this.calcFeesAmount(txReceipt)
         .plus(transaction.value.toString())
-        .toString();
+        .toFixed();
     } catch (e) {
       if (e.message.includes('transaction failed')) {
         txBase.success = false;
-        txBase.feesAmount = this.calcFeesAmount(e.receipt).toString();
+        txBase.feesAmount = this.calcFeesAmount(e.receipt).toFixed();
         txBase.totalAmount = this.calcFeesAmount(e.receipt)
           .plus(transaction.value.toString())
-          .toString();
+          .toFixed();
       } else {
         throw e;
       }
@@ -145,14 +145,13 @@ export class EthService implements OnModuleInit {
       ? new BigNumber(txBase.fromPreviousBalance)
           .minus(txBase.amount)
           .minus(txBase.feesAmount)
-          .toString()
+          .toFixed()
       : null;
 
     txBase.toNextBalance = txBase.toPreviousBalance
-      ? new BigNumber(txBase.toPreviousBalance).plus(txBase.amount).toString()
+      ? new BigNumber(txBase.toPreviousBalance).plus(txBase.amount).toFixed()
       : null;
 
-    //   console.log(txBase)
     await this.saveTx(txBase as TransactionEntity);
     if (accounts.to) {
       await this.updateAccountStats({
@@ -164,7 +163,7 @@ export class EthService implements OnModuleInit {
         totalFeesPaid: accounts.to.totalFeesPaid,
         totalReceived: new BigNumber(accounts.to.totalReceived)
           .plus(txBase.amount)
-          .toString(),
+          .toFixed(),
         totalSent: accounts.to.totalSent,
       });
     }
@@ -177,11 +176,11 @@ export class EthService implements OnModuleInit {
         outgoingTxCount: accounts.from.outgoingTxCount + 1,
         totalFeesPaid: new BigNumber(accounts.from.totalFeesPaid)
           .plus(txBase.feesAmount)
-          .toString(),
+          .toFixed(),
         totalReceived: accounts.from.totalReceived,
         totalSent: new BigNumber(accounts.from.totalSent)
           .plus(txBase.amount)
-          .toString(),
+          .toFixed(),
       });
     }
   }
@@ -194,7 +193,6 @@ export class EthService implements OnModuleInit {
 
   async saveTx(tx: TransactionEntity): Promise<void> {
     // this._logger.debug(`saveTx: ${JSON.stringify(tx)}`);
-
     await this._transactionRepository.insert(tx);
   }
 
