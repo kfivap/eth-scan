@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ethers } from 'ethers';
 import {
   BlockWithTransactions,
@@ -14,7 +19,10 @@ import { LastProcessedBlockEntity } from 'src/entities/last-processed-block.enti
 import { BlockRewardEntity } from 'src/entities/block-reward.entity';
 
 @Injectable()
-export class EthService implements OnModuleInit {
+export class EthService implements OnModuleInit, OnModuleDestroy {
+  // service
+  private _currentProcess: Promise<void>;
+  private _isTerminating = false;
   private _provider: ethers.providers.InfuraProvider;
   private _logger = new Logger(EthService.name);
 
@@ -46,29 +54,40 @@ export class EthService implements OnModuleInit {
     this.pullBlocks();
   }
 
+  async onModuleDestroy() {
+    this._logger.debug('starting terminating...');
+    this._isTerminating = true;
+    this._logger.debug('waiting for current processing block...');
+    await this._currentProcess;
+    this._logger.debug('current processing block done');
+  }
+
   async pullBlocks(): Promise<void> {
-    let blockNumber = await this.getLastProcessedBlockNumber();
+    let blockNumber = (await this.getLastProcessedBlockNumber()) + 1;
 
     while (true) {
       const batchSize = 10;
       const promises: Promise<BlockWithTransactions>[] = [];
       for (let i = 0; i < batchSize; i++) {
-        // promises.push(this._provider.getBlockWithTransactions(46147));
         promises.push(this._provider.getBlockWithTransactions(blockNumber + i));
       }
 
       const blocks = await Promise.all(promises);
       for (const block of blocks) {
+        if (this._isTerminating) {
+          return;
+        }
         this._logger.log(
           `processing block ${blockNumber}, txCount: ${
             block.transactions.length
           } , created on ${new Date(block.timestamp * 1000)}`,
         );
 
-        //   const _processBlockStartAt = Date.now();
-        await this.processBlock(block);
-        //   console.log('processBlock ms', Date.now() - _processBlockStartAt);
-        await this.setLastProcessedBlockNumber(blockNumber);
+        this._currentProcess = (async () => {
+          await this.processBlock(block);
+          await this.setLastProcessedBlockNumber(blockNumber);
+        })();
+        await this._currentProcess;
         blockNumber++;
         this.logProcessingInfo(blockNumber);
       }
@@ -323,9 +342,9 @@ export class EthService implements OnModuleInit {
     if (!exist) {
       await this._lastProcessedBlockRepository.insert({
         blockchain: this._blockchain,
-        blockNumber: 1,
+        blockNumber: 0,
       });
-      return 1;
+      return 0;
     } else {
       return exist.blockNumber;
     }
