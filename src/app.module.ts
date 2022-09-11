@@ -28,7 +28,7 @@ import { EthModule } from './eth/eth.module';
       ],
       synchronize: true,
       namingStrategy: new SnakeNamingStrategy(),
-      logging: true,
+      // logging: true,
     }),
     EthModule,
   ],

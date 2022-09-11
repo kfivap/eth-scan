@@ -133,7 +133,7 @@ export class EthService implements OnModuleInit, OnModuleDestroy {
     const blockRewardData: BlockRewardEntity = {
       blockNumber: block.number,
       account: miner,
-      amount: blockRewardAmount.toString(),
+      amount: blockRewardAmount.toFixed(),
     };
 
     await this._blockRewardRepository.insert(blockRewardData);
@@ -142,11 +142,9 @@ export class EthService implements OnModuleInit, OnModuleDestroy {
       ...account,
       totalMinedAmount: new BigNumber(account.totalMinedAmount)
         .plus(blockRewardAmount)
-        .toString(),
+        .toFixed(),
       totalMinedBlocks: account.totalMinedBlocks + 1,
-      balance: new BigNumber(account.balance)
-        .plus(blockRewardAmount)
-        .toString(),
+      balance: new BigNumber(account.balance).plus(blockRewardAmount).toFixed(),
     });
   }
 
