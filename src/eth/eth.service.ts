@@ -17,7 +17,7 @@ import { Repository } from 'typeorm';
 import BigNumber from 'bignumber.js';
 import { LastProcessedBlockEntity } from 'src/entities/last-processed-block.entity';
 import { BlockRewardEntity } from 'src/entities/block-reward.entity';
-
+import * as needle from 'needle';
 @Injectable()
 export class EthService implements OnModuleInit, OnModuleDestroy {
   // service
@@ -62,8 +62,45 @@ export class EthService implements OnModuleInit, OnModuleDestroy {
     this._logger.debug('current processing block done');
   }
 
+  async processGenesisJson() {
+    const { body: genesis } = await needle(
+      'get',
+      'https://raw.githubusercontent.com/ethereum/pyethsaletool/master/genesis_block.json',
+    );
+    for (const [address, value] of Object.entries(
+      JSON.parse(genesis) as {
+        [address: string]: { wei: string };
+      },
+    )) {
+      const account = await this.getOrCreateAccount(address);
+      await this.updateAccountStats({
+        ...account,
+        balance: value.wei,
+        totalReceived: value.wei,
+      });
+      await this.saveTx({
+        txHash: `genesis_${address}`,
+        blockNumber: 0,
+        from: 'genesis',
+        to: address,
+        success: true,
+        amount: value.wei,
+        feesAmount: '0',
+        totalAmount: value.wei,
+        fromPreviousBalance: null,
+        toPreviousBalance: null,
+        fromNextBalance: null,
+        toNextBalance: null,
+      });
+    }
+  }
+
   async pullBlocks(): Promise<void> {
-    let blockNumber = (await this.getLastProcessedBlockNumber()) + 1;
+    let blockNumber = await this.getLastProcessedBlockNumber();
+    if (blockNumber === 0) {
+      await this.processGenesisJson();
+    }
+    blockNumber++;
 
     while (true) {
       const batchSize = 10;
